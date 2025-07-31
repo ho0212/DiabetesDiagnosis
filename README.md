@@ -33,6 +33,20 @@ See `data/README.md` for dataset details.
 
 ---
 
+## Model Evaluation
+
+Two models were trained and evaluated on the diabetes dataset using a confusion matrix and performance metrics:
+
+| Model            | Accuracy |
+|------------------|----------|
+| Decision Tree    | **97.47%** |
+| Logistic Regression | **92.93%** |
+
+Additional metrics such as precision, recall, and F1-score are visualized in Figures 7–10 in the project report.
+
+
+---
+
 ##  Repository Structure
 
 | Folder        | Description                              |
