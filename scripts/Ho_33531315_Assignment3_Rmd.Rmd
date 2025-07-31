@@ -1,0 +1,188 @@
+# load required libraries
+```{r, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+library(visdat)
+library(naniar)
+library(stats)
+library(corrplot)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(DescTools)
+library(nnet)
+```
+# Data Preprocessing
+In this section, I first loaded and exam the data.
+Data wrangling is included in this section.
+```{r, message=FALSE}
+diabetes <- read_csv("Dataset of Diabetes .csv")
+head(diabetes)
+```
+Using visdat and naniar libraries to check the missing value.
+```{r}
+vis_dat(diabetes) + ggtitle("Missing Value in the Diabetes Dataset")
+```
+
+```{r}
+miss <- miss_summary(diabetes)
+miss$miss_var_summary
+```
+According to the graph and the table, there is no missing value in this dataset.
+Next, I removed `ID` and `No_Pation` since both columns are not related.
+Then I transferred `Gender` to continuous so that it will be easier to do the further actions.
+However, there is an error in the `Gender` column. According to the bar chart below, some data points are "f" instead of "F".
+This issue had been fixed while I transferred `Gender` from categorical to continuous.
+```{r}
+diabetes <- diabetes[3:14]
+ggplot(diabetes, aes(x = Gender, fill=Gender)) + geom_bar() + ggtitle("Data Distribution in `Gender` Column")
+```
+The bar chart below is the modified result.
+```{r}
+diabetes$Gender[diabetes$Gender=="M"] <- 1
+diabetes$Gender[diabetes$Gender=="F"] <- 0
+diabetes$Gender[diabetes$Gender=="f"] <- 0
+
+ggplot(diabetes, aes(x = Gender, group=Gender, fill=Gender)) + geom_bar() + ggtitle("Data Distribution in `Gender` Column (0: Female, 1: Male)")
+```
+Finally, I used as.numeric() function to transfer data type as continuous.
+And I also changed the type of target column, `CLASS`, to factor type.
+```{r}
+diabetes$Gender <- as.numeric(diabetes$Gender)
+diabetes$CLASS <- as.factor(diabetes$CLASS)
+str(diabetes)
+```
+To increase the performance of models, I used correlation matrix to exam the relationship between attributes.
+Since all the data except `CLASS` are continuous, I used Pearson Correlation to create the correlation matrix.
+According to the heatmap below, all correlation coefficients are between -0.8 ~ 0.8. Hence, there is no need to remove any attributes.
+```{r}
+corr <- cor(diabetes[1:11], method="pearson") # all numeric data
+corr <- as.data.frame(as.table(corr))
+ggplot(corr, aes(Var1, Var2, fill=Freq)) + geom_tile(col="white") + geom_text(aes(label=round(Freq,2)), col="black") + scale_fill_gradient(low="white", high="blue") + 
+  labs(x="Attributes", y="Attributes") + ggtitle("Correlation Matrix") + theme(plot.title = element_text(hjust=.5)) + theme_minimal()
+
+```
+# Split train/test set
+```{r}
+set.seed(12345)
+train_index <- createDataPartition(diabetes$CLASS, p=.8, list = F, times = 1)
+train <- diabetes[train_index,]
+test <- diabetes[-train_index,]
+
+# Bootstrapping
+n <- 5
+boot_samples <- list()
+
+for (i in 1:n){
+  index <- sample(1:nrow(train), nrow(train), replace = T)
+  boot_sample <- train[index,]
+  boot_samples[[i]] <- boot_sample
+}
+```
+
+# Decision Tree
+```{r}
+predictions_en <- list()
+predictions_gi <- list()
+models_en <- list() 
+models_gi <- list()
+
+for(i in 1:n){
+  models_en[[i]] <- rpart(CLASS ~ ., data = as.data.frame(boot_samples[i]), parms = list(split = "Entropy"))
+  models_gi[[i]] <- rpart(CLASS ~ ., data = as.data.frame(boot_samples[i]), parms = list(split = "gini"))
+  predictions_en[[i]] <- predict(models_en[[i]], test, type="class")
+  predictions_gi[[i]] <- predict(models_gi[[i]], test, type="class")
+}
+
+rpart.plot(models_en[[1]])# Example of the decision tree
+```
+
+# Merge multiple predictions and vote the final answer - Decision Tree
+```{r}
+# Combine the two set of answers from both models
+combined <- as.character(predictions_en[[1]])
+for(i in 2:length(predictions_en)){
+  combined <- cbind(combined, as.character(predictions_en[[i]]))
+}
+for(i in 1:length(predictions_gi)){
+  combined <- cbind(combined, as.character(predictions_gi[[i]]))
+}
+
+# Vote
+answers <- list()
+for(i in 1:nrow(combined)){
+  answers[[i]] <- Mode(combined[i,])[1]
+}
+answers <- as.factor(unlist(answers))
+
+# Evaluation
+evaluation <- confusionMatrix(answers, test$CLASS, mode = "everything")
+conf_ma <- as.data.frame(evaluation$table)
+
+ggplot(conf_ma, aes(Prediction, Reference, fill=Freq)) + geom_tile(col="white") + geom_text(aes(label=round(Freq,2)), col="black") + scale_fill_gradient(low="white", high="blue") + 
+  labs(x="Actual", y="Predicted") + ggtitle("Confusion Matrix - Decision Tree") + theme(plot.title = element_text(hjust=.5)) + theme_minimal()
+```
+
+# Accuracy - Decision Tree
+```{r}
+accuracy <- paste0("Accuracy: ", round(evaluation$overall["Accuracy"]*100, 2), "%")
+accuracy
+```
+
+# Evaluation Matrix - Decision Tree
+```{r}
+eva_mat <- select(as.data.frame(evaluation$byClass), Precision, Recall, F1)
+eva_mat
+```
+
+# Regression Model
+```{r}
+predictions <- list()
+models <- list() 
+
+for(i in 1:n){
+  models[[i]] <- multinom(CLASS ~ ., data = as.data.frame(boot_samples[i]))
+  predictions[[i]] <- predict(models[[i]], test, type="class")
+}
+```
+
+# Merge multiple predictions and vote the final answer - Regression Model
+```{r}
+# Combine the two set of answers from both models
+combined <- as.character(predictions[[1]])
+for(i in 2:length(predictions)){
+  combined <- cbind(combined, as.character(predictions[[i]]))
+}
+
+# Vote
+answers <- list()
+for(i in 1:nrow(combined)){
+  answers[[i]] <- Mode(combined[i,])[1]
+}
+answers <- as.factor(unlist(answers))
+
+# Evaluation
+evaluation <- confusionMatrix(answers, test$CLASS, mode = "everything")
+conf_ma <- as.data.frame(evaluation$table)
+
+ggplot(conf_ma, aes(Prediction, Reference, fill=Freq)) + geom_tile(col="white") + geom_text(aes(label=round(Freq,2)), col="black") + scale_fill_gradient(low="white", high="blue") + 
+  labs(x="Actual", y="Predicted") + ggtitle("Confusion Matrix - Regression Models") + theme(plot.title = element_text(hjust=.5)) + theme_minimal()
+```
+
+# Accuracy - Regression Model
+```{r}
+accuracy <- paste0("Accuracy: ", round(evaluation$overall["Accuracy"]*100, 2), "%")
+accuracy
+```
+
+# Evaluation Matrix - Regression Model
+```{r}
+eva_mat <- select(as.data.frame(evaluation$byClass), Precision, Recall, F1)
+eva_mat
+```
+
+
+
+
+
